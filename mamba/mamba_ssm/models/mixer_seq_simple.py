@@ -141,6 +141,7 @@ class MixerModel(nn.Module):
                 **(initializer_cfg if initializer_cfg is not None else {}),
             )
         )
+        self.compute_attn_matrix = False
 
     def allocate_inference_cache(self, batch_size, max_seqlen, dtype=None, **kwargs):
         return {
@@ -153,7 +154,7 @@ class MixerModel(nn.Module):
         residual = None
         for layer in self.layers:
             hidden_states, residual = layer(
-                hidden_states, residual, inference_params=inference_params
+                hidden_states, residual, inference_params=inference_params, compute_attn_matrix=self.compute_attn_matrix
             )
         if not self.fused_add_norm:
             residual = (hidden_states + residual) if residual is not None else hidden_states

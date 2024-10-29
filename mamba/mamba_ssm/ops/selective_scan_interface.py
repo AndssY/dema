@@ -164,10 +164,12 @@ class MambaInnerFn(torch.autograd.Function):
     def forward(ctx, xz, conv1d_weight, conv1d_bias, x_proj_weight, delta_proj_weight,
                 out_proj_weight, out_proj_bias,
                 A, B=None, C=None, D=None, delta_bias=None, B_proj_bias=None,
-                C_proj_bias=None, delta_softplus=True, checkpoint_lvl=1):
+                C_proj_bias=None, delta_softplus=True, checkpoint_lvl=1, compute_attn_matrix=False):
         """
              xz: (batch, dim, seqlen)
         """
+        # Debugging output
+        print(f"compute_attn_matrix received in forward: {compute_attn_matrix}")
         assert causal_conv1d_cuda is not None, "causal_conv1d_cuda is not available. Please install causal-conv1d."
         assert checkpoint_lvl in [0, 1]
         L = xz.shape[-1]
@@ -196,6 +198,7 @@ class MambaInnerFn(torch.autograd.Function):
         ctx.is_variable_C = C is None
         ctx.B_proj_bias_is_None = B_proj_bias is None
         ctx.C_proj_bias_is_None = C_proj_bias is None
+        ctx.compute_attn_matrix = compute_attn_matrix
         if B is None:  # variable B
             B = x_dbl[:, delta_rank:delta_rank + d_state]  # (bl dstate)
             if B_proj_bias is not None:
@@ -225,6 +228,21 @@ class MambaInnerFn(torch.autograd.Function):
         out, scan_intermediates, out_z = selective_scan_cuda.fwd(
             conv1d_out, delta, A, B, C, D, z, delta_bias, delta_softplus
         )
+        save_dict = {}
+        if compute_attn_matrix:
+            xai_matrix = compute_attn_matrix_fn(delta, delta_bias, A=A, B=B, C=C, L=L, x_shape=x.shape)
+            save_dict["xai"] = xai_matrix
+            print('00000', xai_matrix.shape)
+            # xai_vector = compute_middle_attn_vector(delta, delta_bias, A=A, B=B, C=C, L=L, x_shape=x.shape)
+            # save_dict["xai_vector"] = xai_vector
+        else:
+            xai_vector = compute_middle_attn_vector(delta, delta_bias, A=A, B=B, C=C, L=L, x_shape=x.shape)
+            save_dict["xai"] = xai_vector
+            print('-00000', xai_vector.shape)
+        # xai_vector = compute_middle_attn_vector(delta, delta_bias, A=A, B=B, C=C, L=L, x_shape=x.shape)
+        save_dict["z"] = z
+        save_dict["conv1d_out"] = conv1d_out
+
         ctx.delta_softplus = delta_softplus
         ctx.out_proj_bias_is_None = out_proj_bias is None
         ctx.checkpoint_lvl = checkpoint_lvl
@@ -233,7 +251,7 @@ class MambaInnerFn(torch.autograd.Function):
         ctx.save_for_backward(xz, conv1d_weight, conv1d_bias, x_dbl, x_proj_weight,
                               delta_proj_weight, out_proj_weight, conv1d_out, delta,
                               A, B, C, D, delta_bias, scan_intermediates, out)
-        return F.linear(rearrange(out_z, "b d l -> b l d"), out_proj_weight, out_proj_bias)
+        return (F.linear(rearrange(out_z, "b d l -> b l d"), out_proj_weight, out_proj_bias), save_dict)
 
     @staticmethod
     @custom_bwd
@@ -312,11 +330,12 @@ def mamba_inner_fn(
     xz, conv1d_weight, conv1d_bias, x_proj_weight, delta_proj_weight,
     out_proj_weight, out_proj_bias,
     A, B=None, C=None, D=None, delta_bias=None, B_proj_bias=None,
-    C_proj_bias=None, delta_softplus=True
+    C_proj_bias=None, delta_softplus=True, compute_attn_matrix=False,
 ):
+    MambaInnerFn.compute_attn_matrix = compute_attn_matrix
     return MambaInnerFn.apply(xz, conv1d_weight, conv1d_bias, x_proj_weight, delta_proj_weight,
                               out_proj_weight, out_proj_bias,
-                              A, B, C, D, delta_bias, B_proj_bias, C_proj_bias, delta_softplus)
+                              A, B, C, D, delta_bias, B_proj_bias, C_proj_bias, delta_softplus, 1, compute_attn_matrix)
 
 
 def mamba_inner_ref(
@@ -354,4 +373,36 @@ def mamba_inner_ref(
         else:
             C = rearrange(C, "(b l) (dstate two) -> b dstate (l two)", l=L, two=2).contiguous()
     y = selective_scan_fn(x, delta, A, B, C, D, z=z, delta_bias=delta_bias, delta_softplus=True)
-    return F.linear(rearrange(y, "b d l -> b l d"), out_proj_weight, out_proj_bias)
+    return F.linear(rearrange(y, "b d l -> b l d"), out_proj_weight, out_proj_bias) 
+
+def compute_middle_attn_vector(delta, delta_bias, A, B, C, L, x_shape, full_vector=False):
+    dt = F.softplus(delta + delta_bias.unsqueeze(0).unsqueeze(-1))
+    dA = torch.exp(torch.einsum("bdl,dn->bldn", dt, A))  ### or dt@A!!
+    dB = torch.einsum("bdl,bnl->bldn", dt, B.squeeze(1))
+    AttnVecorOverCLS = torch.zeros(x_shape).to(dA.device)  # BHL: L vectors per batch and channel
+    cls_pos = x_shape[-1]
+    for t in range(cls_pos):
+        curr_C = C[:, :, :, cls_pos-1]
+        currA = torch.ones(dA.shape[0], dA.shape[2], dA.shape[3]).to(dA.device)
+        if t < (cls_pos - 1):
+            for i in range(cls_pos - 1 - t):
+                currA = currA * dA[:, cls_pos - 1 - i, :, :]
+        currB = dB[:, t, :, :]
+        AttnVecorOverCLS[:, :, t] = torch.sum(curr_C * currA * currB, axis=-1)
+    return AttnVecorOverCLS
+    
+def compute_attn_matrix_fn(delta, delta_bias, A, B, C, L, x_shape, dtype=torch.float16):
+    dt = F.softplus(delta + delta_bias.unsqueeze(0).unsqueeze(-1))
+    dA = torch.exp(torch.einsum("bdl,dn->bldn", dt, A))
+    dB = torch.einsum("bdl,bnl->bldn", dt, B.squeeze(1))
+    AttnMatrixOverCLS = torch.zeros((x_shape[0], x_shape[1], x_shape[2], x_shape[2]),requires_grad=True).to(dtype).to(dA.device) #BHLL: L vectors per batch and channel
+    for r in range(L):
+        for c in range(r+1):
+            curr_C = C[:,:,:,r]
+            currA = torch.ones((dA.shape[0],dA.shape[2],dA.shape[3]),requires_grad=True, dtype = dtype).to(dA.device)
+            if c < r:
+                for i in range(r-c):
+                    currA = currA*dA[:,r-i,:,:]
+            currB = dB[:,c,:,:]
+            AttnMatrixOverCLS[:,:,r,c] = torch.sum(curr_C*currA*currB, axis=-1)
+    return AttnMatrixOverCLS

@@ -116,7 +116,7 @@ class Mamba(nn.Module):
 
         self.out_proj = nn.Linear(self.d_inner, self.d_model, bias=bias, **factory_kwargs)
 
-    def forward(self, hidden_states, inference_params=None):
+    def forward(self, hidden_states, inference_params=None, compute_attn_matrix=False):
         """
         hidden_states: (B, L, D)
         Returns: same shape as hidden_states
@@ -143,7 +143,7 @@ class Mamba(nn.Module):
         A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
         # In the backward pass we write dx and dz next to each other to avoid torch.cat
         if self.use_fast_path and causal_conv1d_fn is not None and inference_params is None:  # Doesn't support outputting the states
-            out = mamba_inner_fn(
+            out, xai = mamba_inner_fn(
                 xz,
                 self.conv1d.weight,
                 self.conv1d.bias,
@@ -157,7 +157,14 @@ class Mamba(nn.Module):
                 self.D.float(),
                 delta_bias=self.dt_proj.bias.float(),
                 delta_softplus=True,
+                compute_attn_matrix=compute_attn_matrix,
             )
+            # self.attn_matrix = xai["attention_matrix"]
+            # xai_vector = xai["xai_vector"]
+            # self.xai = xai_vector
+            # xai_vector = xai_a["xai_vector"]
+            # self.xai_b = xai_vector
+            self.xai = xai["xai"]
         else:
             x, z = xz.chunk(2, dim=1)
             # Compute short convolution
@@ -322,7 +329,7 @@ class Block(nn.Module):
             ), "Only LayerNorm and RMSNorm are supported for fused_add_norm"
 
     def forward(
-        self, hidden_states: Tensor, residual: Optional[Tensor] = None, inference_params=None
+        self, hidden_states: Tensor, residual: Optional[Tensor] = None, inference_params=None, compute_attn_matrix=False,
     ):
         r"""Pass the input through the encoder layer.
 
@@ -346,7 +353,7 @@ class Block(nn.Module):
                 residual_in_fp32=self.residual_in_fp32,
                 eps=self.norm.eps,
             )
-        hidden_states = self.mixer(hidden_states, inference_params=inference_params)
+        hidden_states = self.mixer(hidden_states, inference_params=inference_params, compute_attn_matrix=compute_attn_matrix)
         return hidden_states, residual
 
     def allocate_inference_cache(self, batch_size, max_seqlen, dtype=None, **kwargs):

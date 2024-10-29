@@ -48,7 +48,6 @@ class Mamba_mujoco(TrajectoryModel):
         action_tanh=True,
         reward_type='normal',
         time_embd=False,
-        type_input='B3LD',
     ):
         TrajectoryModel.__init__(self, state_dim, act_dim, max_length=max_length)
         self.max_length = max_length
@@ -60,9 +59,8 @@ class Mamba_mujoco(TrajectoryModel):
         self.dropout = dropout
         self.reward_type = reward_type
         self.time_embd=time_embd
-        self.type_input = type_input
-        n_layer = n_layer
-        ssm_cfg = ssm_cfg
+        self.n_layer = n_layer
+        self.ssm_cfg = ssm_cfg
         rms_norm = rms_norm
         residual_in_fp32 = residual_in_fp32
         fused_add_norm = fused_add_norm
@@ -72,7 +70,6 @@ class Mamba_mujoco(TrajectoryModel):
         self.ret_emb = nn.Linear(1, self.input_emb_size)
         self.state_encoder = nn.Linear(self.state_dim, self.input_emb_size)
         self.action_embeddings = nn.Linear(self.act_dim, self.input_emb_size)
-
         # note: we don't predict states or returns for the paper
         self.predict_state = torch.nn.Linear(self.d_model, self.state_dim)
         self.predict_action = nn.Sequential(
@@ -83,7 +80,7 @@ class Mamba_mujoco(TrajectoryModel):
         self.backbone = MixerModel(
             d_model=self.d_model,
             n_layer=n_layer,
-            vocab_size=self.input_emb_size if type_input=='B3LD' else 3*self.input_emb_size,
+            vocab_size=self.input_emb_size,
             # dropout_val=self.dropout,
             ssm_cfg=ssm_cfg,
             rms_norm=rms_norm,
@@ -123,35 +120,33 @@ class Mamba_mujoco(TrajectoryModel):
             action_embeddings = action_embeddings + time_embeddings
             returns_embeddings = returns_embeddings + time_embeddings
         # print(state_embeddings.shape,action_embeddings.shape,returns_embeddings.shape)
-        if self.reward_type == 'K' and self.type_input == 'B3LD':
+        if self.reward_type == 'K':
             returns_embeddings = returns_embeddings[:, 0]
             u = torch.zeros((batch_size, (sequence_len-del_r)*2+1, self.input_emb_size), dtype=torch.float32, device=state_embeddings.device)
             # print('token',token_embeddings.shape)
             u[:,0,:] = returns_embeddings
             u[:,1::2,:] = action_embeddings
             u[:,2::2,:] = state_embeddings
-        elif self.type_input == 'B3LD':
+        else:
             u = torch.stack(
                 (returns_embeddings, action_embeddings, state_embeddings), dim=1
             ).permute(0, 2, 1, 3).reshape(batch_size, 3*(sequence_len-del_r), self.input_emb_size)
-        elif self.type_input == 'BL3D':
-            u = torch.cat([returns_embeddings, action_embeddings, state_embeddings], dim=-1)
+
         y = self.backbone(u)
         # if num_last_tokens > 0:
         #     y = y[:, -num_last_tokens:]
         # reshape x so that the second dimension corresponds to the original
         # returns (0), states (1), or actions (2); i.e. x[:,1,t] is the token for s_t
 
-        if self.reward_type == 'K' and self.type_input == 'B3LD':
+        if self.reward_type == 'K':
             y = y[:, 2::2, :]
             action_preds = self.predict_action(y)
-        elif self.type_input == 'B3LD':
+        else:
             y = y.reshape(batch_size, sequence_len-del_r, 3, self.d_model).permute(0, 2, 1, 3)
             # return_preds = self.predict_return(y[:, 2])  # predict next return given state and action
             # state_preds = self.predict_state(y[:, 2])    # predict next state given state and action
             action_preds = self.predict_action(y[:,-1])  # predict next action given state
-        elif self.type_input == 'BL3D':
-            action_preds = self.predict_action(y).reshape(batch_size, sequence_len - del_r, -1)
+
         return None, action_preds, None
 
     def get_action(self, states, actions, rewards, returns_to_go, timesteps, position_ids=None, num_last_tokens=0, **kwargs):
@@ -167,26 +162,21 @@ class Mamba_mujoco(TrajectoryModel):
         state_embeddings = self.state_encoder(states).reshape(bs, -1, self.input_emb_size)
         action_embeddings = self.action_embeddings(actions).reshape(bs, -1, self.input_emb_size)
         returns_embeddings = self.ret_emb(returns_to_go).reshape(bs, -1, self.input_emb_size)
-        if self.time_embd:
-            time_embeddings = self.embed_timestep(timesteps[:, -1]).reshape(1, -1)
-            state_embeddings = state_embeddings + time_embeddings
-            action_embeddings = action_embeddings + time_embeddings
-            returns_embeddings = returns_embeddings + time_embeddings
-        if self.type_input == 'B3LD':
-            u = torch.stack(
-                (returns_embeddings, action_embeddings, state_embeddings), dim=1
-            ).permute(0, 2, 1, 3).reshape(bs, 3, self.input_emb_size)
-        elif self.type_input == 'BL3D':
-            u = torch.cat([returns_embeddings, action_embeddings, state_embeddings], dim=-1)
+        # time_embeddings = self.embed_timestep(timesteps[:, -1]).reshape(1, -1)
+        # state_embeddings = state_embed + time_embeddings
+        # action_embeddings = action_embed + time_embeddings
+        # returns_embeddings = reward_embed + time_embeddings
+        u = torch.stack(
+            (action_embeddings, returns_embeddings, state_embeddings), dim=1
+        ).permute(0, 2, 1, 3).reshape(bs, 3, self.input_emb_size)
+
         outputs = torch.zeros(bs, u.shape[1], self.d_model, dtype=u.dtype, device=u.device)
         for i in range(u.shape[1]):
             ret_y = self.backbone(u[:, i:i+1], inference_params=self.inference_params)
             outputs[:, i] = ret_y[:, 0]
             self.inference_params.seqlen_offset += 1
-        if self.type_input == 'B3LD':
-            outputs = outputs.reshape(bs, 1, 3, self.d_model).permute(0, 2, 1, 3)
+        outputs = outputs.reshape(bs, 1, 3, self.d_model).permute(0, 2, 1, 3)
         action_preds = self.predict_action(outputs[:,-1])
-        # TODO BL3D
         return action_preds[:, -1]
 
     def get_action2(self, states, actions, rewards, returns_to_go, timesteps, **kwargs):
@@ -291,7 +281,7 @@ if __name__ == '__main__':
 
     out2 = torch.zeros(1,seq_len,action_size).to(device)
     model.inference_params = InferenceParams(max_seqlen=3000, max_batch_size=1)
-    for x in range(seq_len):
+    for x in range(seq_len): # 验证forward和get_action的前向传播数值一致
         z = model.get_action(u[:,x,0:state_size], u[:,x,state_size:], None, rtg[:,x,:], timesteps[:,x])
         out2[:, x, :] = z
     out2 = out2

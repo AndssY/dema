@@ -20,10 +20,3 @@ cd `mamba` and `pip install -e .`
 ## Acknowledgements
 
 This repository is based on [decision-transformer](https://github.com/kzl/decision-transformer.git), [Mamba](https://github.com/state-spaces/mamba.git), [Mamba-minimal](https://github.com/johnma2006/mamba-minimal) and [HiddenMambaAttn](https://github.com/AmeenAli/HiddenMambaAttn?tab=readme-ov-file). Thanks for their wonderful works.
-
-## To-Do
-
-1. add support for `cu_seqlens`.
-2. how to install the env of `atari` and the version of `atari`.
-3. run command of attention, atari, rnn-like dema.
-4. code of maze navigation.

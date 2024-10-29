@@ -26,7 +26,7 @@ python download_d4rl_datasets.py
 Experiments can be reproduced with the following:
 
 ```
-python experiment.py --env hopper --dataset medium
+python experiment.py --env hopper --dataset medium --model_type dt
 ```
 
 Adding `-w True` will log results to Weights and Biases.

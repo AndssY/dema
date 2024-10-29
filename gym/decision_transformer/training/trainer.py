@@ -6,6 +6,7 @@ import time
 
 def seconds_format(time_cost: int):
     """
+    耗费时间格式转换
     :param time_cost: 
     :return: 
     """
@@ -15,15 +16,15 @@ def seconds_format(time_cost: int):
     if not time_cost or time_cost < 0:
         raise TypeError
     elif time_cost < min:
-        return '%sS' % time_cost
+        return '%s秒' % time_cost
     elif time_cost < hour:
-        return '%sM%sS' % (divmod(time_cost, min))
+        return '%s分%s秒' % (divmod(time_cost, min))
     elif time_cost < day:
         cost_hour, cost_min = divmod(time_cost, hour)
-        return '%sH%s' % (cost_hour, seconds_format(cost_min))
+        return '%s小时%s' % (cost_hour, seconds_format(cost_min))
     else:
         cost_day, cost_hour = divmod(time_cost, day)
-        return '%sD%s' % (cost_day, seconds_format(cost_hour))
+        return '%s天%s' % (cost_day, seconds_format(cost_hour))
 
 
 class Trainer:
@@ -49,13 +50,12 @@ class Trainer:
         train_start = time.time()
 
         self.model.train()
-
         for _ in range(num_steps):
-            start_time = time.time()
             train_loss = self.train_step()
             train_losses.append(train_loss)
             if self.scheduler is not None:
                 self.scheduler.step()
+
         logs['time/training'] = seconds_format(time.time() - train_start)
 
         eval_start = time.time()

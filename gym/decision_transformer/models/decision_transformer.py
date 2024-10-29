@@ -22,28 +22,23 @@ class DecisionTransformer(TrajectoryModel):
             max_length=None,
             max_ep_len=4096,
             action_tanh=True,
-            attn_type='attn',
             **kwargs
     ):
         super().__init__(state_dim, act_dim, max_length=max_length)
 
         self.hidden_size = hidden_size
-        self.attn_type = attn_type
         config = transformers.GPT2Config(
             vocab_size=1,  # doesn't matter -- we don't use the vocab
             n_embd=hidden_size,
             n_ctx=1024,
-            attn_type=attn_type,
-            use_cache=False,
-            d_conv=4,
             **kwargs
         )
 
         # note: the only difference between this GPT2Model and the default Huggingface version
         # is that the positional embeddings are removed (since we'll add those ourselves)
         self.transformer = GPT2Model(config)
-        if attn_type == 'attn':
-            self.embed_timestep = nn.Embedding(max_ep_len, hidden_size)
+
+        self.embed_timestep = nn.Embedding(max_ep_len, hidden_size)
         self.embed_return = torch.nn.Linear(1, hidden_size)
         self.embed_state = torch.nn.Linear(self.state_dim, hidden_size)
         self.embed_action = torch.nn.Linear(self.act_dim, hidden_size)
@@ -69,13 +64,12 @@ class DecisionTransformer(TrajectoryModel):
         state_embeddings = self.embed_state(states)
         action_embeddings = self.embed_action(actions)
         returns_embeddings = self.embed_return(returns_to_go)
-        if self.attn_type == 'attn':
-            time_embeddings = self.embed_timestep(timesteps)
+        time_embeddings = self.embed_timestep(timesteps)
 
-            # time embeddings are treated similar to positional embeddings
-            state_embeddings = state_embeddings + time_embeddings
-            action_embeddings = action_embeddings + time_embeddings
-            returns_embeddings = returns_embeddings + time_embeddings
+        # time embeddings are treated similar to positional embeddings
+        state_embeddings = state_embeddings + time_embeddings
+        action_embeddings = action_embeddings + time_embeddings
+        returns_embeddings = returns_embeddings + time_embeddings
 
         # this makes the sequence look like (R_1, s_1, a_1, R_2, s_2, a_2, ...)
         # which works nice in an autoregressive sense since states predict actions

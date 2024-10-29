@@ -1,0 +1,129 @@
+# 
+results/
+*.log
+*.txt
+*.bin
+conda_env
+wandb/
+s4_modules/
+*.pkl
+dqn_replay/
+# Data files
+data
+pkl
+temp_save_path
+pkl_dir
+ss.pkl
+tb.sh
+*.out
+*.xml
+runs/
+test_simple_env/
+# Byte-compiled / optimized / DLL files
+__pycache__/
+**/*.pyc
+*.py[cod]
+*$py.class
+
+# Vim swap files
+*.swp
+*.swo
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+#  Usually these files are written by a python script from a template
+#  before PyInstaller builds the exe, so as to inject date/other infos into it.
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# PyBuilder
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# Environments
+.env
+.venv
+env/
+*venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Type checking
+.pyre/
+.pytype/
+
+# IntelliJ/PyCharm
+.idea/
+
+# MuJoCo
+MUJOCO_LOG.TXT
+
+# Mac
+*.DS_Store
+atari/ROMs/Atari-2600-VCS-ROM-Collection.zip
+atari/conda_env.yml
+atari/Atari-2600-VCS-ROM-Collection.zip

@@ -19,6 +19,7 @@ from decision_transformer.evaluation.evaluate_episodes import evaluate_episode, 
 from decision_transformer.models.ssm import Mamba_mujoco
 from decision_transformer.training.seq_trainer import SequenceTrainer
 import matplotlib.pyplot as plt
+
 import sys
 from envpool.registration import make_gym
 
@@ -62,8 +63,7 @@ def param_to_module(param):
 
 def report_parameters(model, topk=10):
     counts = {k: p.numel() for k, p in model.named_parameters()}
-    # n_parameters = sum(counts.values())
-    n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    n_parameters = sum(counts.values())
     print(f'[ utils/arrays ] Total parameters: {_to_str(n_parameters)}')
 
     modules = dict(model.named_modules())
@@ -79,12 +79,6 @@ def report_parameters(model, topk=10):
     print(' ' * 8, f'... and {len(counts) - topk} others accounting for {_to_str(remaining_parameters)} parameters')
     return n_parameters
 
-def report_GPU_memory(model):
-    b = torch.cuda.memory_allocated("cuda")
-    c = torch.cuda.memory_cached("cuda")
-    print(b)
-    print(c)
-    return 0
 
 def experiment(
         exp_prefix,
@@ -111,7 +105,7 @@ def experiment(
     sys.stdout = FileRedirector(f'{exp_path}/out.log')
     sys.stderr = FileRedirector(f'{exp_path}/out.log')
     print(f"Exporting log to {exp_path}")
-    print('Now time is ', current_time)
+    print('NOW TIME IS ', current_time)
     print("ARGS ON RUN")
     for k in variant.keys():
         print(f"{k:20}:: {variant[k]}")
@@ -125,17 +119,17 @@ def experiment(
     if env_name == 'hopper':
         env = make_env('Hopper-v3')
         max_ep_len = 1000
-        env_targets = [3600, 7200, 36000, 72000]  # evaluation conditioning targets
+        env_targets = [3600, 2700, 1800]  # evaluation conditioning targets
         scale = 1000.  # normalization for rewards/returns
     elif env_name == 'halfcheetah':
         env = make_env('HalfCheetah-v3')
         max_ep_len = 1000
-        env_targets = [12000, 24000, 120000, 240000]
+        env_targets = [12000, 9000, 6000]
         scale = 1000.
     elif env_name == 'walker2d':
         env = make_env('Walker2d-v3')
         max_ep_len = 1000
-        env_targets = [5000, 10000, 50000, 100000]
+        env_targets = [5000, 3750, 2500]
         scale = 1000.
     elif env_name == 'reacher2d':
         from decision_transformer.envs.reacher_2d import Reacher2dEnv
@@ -353,6 +347,7 @@ def experiment(
                             if variant['run_type'] != 'train':
                                 env.seed(variant['seed']+num_eval_episodes)
                                 env.action_space.seed(variant['seed']+num_eval_episodes)
+
                             ret, length = evaluate_episode_rtg(
                                 env,
                                 state_dim,
@@ -366,7 +361,9 @@ def experiment(
                                 state_std=state_std,
                                 device=device,
                                 model_type=variant['model_type'],
-                                mamba_type=variant['mamba_type']
+                                attention=variant['attention'],
+                                start_time=variant['start_time'],
+                                end_time=variant['end_time']
                             )
                         else:
                             ret, length = evaluate_episode(
@@ -408,8 +405,7 @@ def experiment(
             fused_add_norm=variant['fused_add_norm'],
             dropout = variant['dropout'],
             reward_type = variant['reward_type'],
-            time_embd = variant['time_embd'],
-            type_input = variant['type_input']
+            time_embd = variant['time_embd']
         )
     elif model_type == 'dt':
         from decision_transformer.models.decision_transformer import DecisionTransformer
@@ -426,8 +422,8 @@ def experiment(
             n_positions=1024,
             resid_pdrop=variant['dropout'],
             attn_pdrop=variant['dropout'],
-            attn_type=variant['attn_type'],
         )
+    report_parameters(model)
 
     warmup_steps = variant['warmup_steps']
     optimizer = torch.optim.AdamW(
@@ -451,22 +447,23 @@ def experiment(
         for g in optimizer.param_groups:
             g['lr'] = variant['learning_rate']
         model_final = copy.deepcopy(model)
-        del model_final.embed_timestep
+        try:
+            del model_final.embed_timestep
+        except:
+            pass
     scheduler = torch.optim.lr_scheduler.LambdaLR(
         optimizer,
         lambda steps: min((steps + 1) / warmup_steps, 1)
     )
 
     model = model.to(device=device)
-
-    report_parameters(model)
     print(f'training model type is {type(model)}')
     if model_type == 'mamba' or model_type == 'dt':
         trainer = SequenceTrainer(
             model=model,
             optimizer=optimizer,
             batch_size=batch_size,
-            get_batch=get_batch if variant['mamba_type'] == 'tr' else get_batch_recurrent,
+            get_batch=get_batch,
             scheduler=scheduler,
             loss_fn=lambda s_hat, a_hat, r_hat, s, a, r: torch.mean((a_hat - a) ** 2),
             eval_fns=[eval_episodes(tar, variant['eval_parallel']) for tar in env_targets],
@@ -481,7 +478,7 @@ def experiment(
         )
 
     if variant['run_type'] == 'train':
-        best_result = [-10000 for _ in env_targets]
+        best_result = [-10000 for _ in env_targets] 
         now_best_idx = [0 for i in range(len(best_result))]
         for iter in range(variant['max_iters']):
             outputs, res = trainer.train_iteration(
@@ -512,23 +509,23 @@ def experiment(
             'optimizer_state_dict': optimizer.state_dict(),
             # 'scheduler': scheduler,
         }, f"{save_path}/final_model_iter{iter}.pkl")
-
+    # cannot reproduct the training result due to the seed control of envpool
     if variant['eval_parallel']:
         make_env = partial(gym.make)
         if env_name == 'hopper':
             env = make_env('Hopper-v3')
             max_ep_len = 1000
-            env_targets = [3600, 7200, 36000, 72000]  # evaluation conditioning targets
+            env_targets = [3600, 1800]  # evaluation conditioning targets
             scale = 1000.  # normalization for rewards/returns
         elif env_name == 'halfcheetah':
             env = make_env('HalfCheetah-v3')
             max_ep_len = 1000
-            env_targets = [12000, 24000, 120000, 240000]
+            env_targets = [12000, 6000]
             scale = 1000.
         elif env_name == 'walker2d':
             env = make_env('Walker2d-v3')
             max_ep_len = 1000
-            env_targets = [5000, 10000, 50000, 100000]
+            env_targets = [5000, 2500]
             scale = 1000.
         elif env_name == 'reacher2d':
             from decision_transformer.envs.reacher_2d import Reacher2dEnv
@@ -568,8 +565,10 @@ def experiment(
         trainer.eval_step(print_logs=True, env=variant['env'])
 
     elif variant['run_type'] == 'evaluation':
-        trainer.eval_step(print_logs=True, env=variant['env'])
-      
+        trainer.eval_step(print_logs=True, env=variant['env'])       
+
+    elif variant['run_type'] == 'render':
+        raise NotImplementedError
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -577,26 +576,27 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', type=str, default='medium')  # medium, medium-replay, medium-expert, expert
     parser.add_argument('--seed', type=int, default=123)
     parser.add_argument('--repeat_num', type=int, default=1)
-    parser.add_argument('--reward_type', type=str, default='normal') # normal
+    parser.add_argument('--reward_type', type=str, default='normal') # K_term, normal
     parser.add_argument('--time_embd', type=bool, default=False)
+    parser.add_argument('--attention', type=str, default='step') # trig, step
+    parser.add_argument('--start_time', type=int, default=20) # trig, step
+    parser.add_argument('--end_time', type=int, default=800) # trig, step
+    # must be with run_type==evaluation
     parser.add_argument('--mode', type=str, default='normal')  # normal for standard setting, delayed for sparse
-    parser.add_argument('--type_input', type=str, default='B3LD')  # B3LD,BL3D
-    parser.add_argument('--run_type', type=str, default='train')  # train, evaluation, render
-    parser.add_argument('--mamba_type', type=str, default='tr')  # tr, rnn
+    parser.add_argument('--run_type', type=str, default='evaluation')  # train, evaluation, render
     parser.add_argument('--K', type=int, default=20)
     parser.add_argument('--pct_traj', type=float, default=1.)
     parser.add_argument('--batch_size', type=int, default=64)
     parser.add_argument('--model_type', type=str,
                         default='mamba')  # dt for decision transformer, bc for behavior cloning
-    parser.add_argument('--attn_type', type=str, default='attn') # attn, s6
     parser.add_argument('--load_model', type=str, default='none')
-    parser.add_argument('--save_prefix', type=str, default='test')
+    parser.add_argument('--save_prefix', type=str, default='attention')
     # dt, s4d, bc, mamba
     # model config for mamba
     parser.add_argument('--d_model', type=int, default=64)
     parser.add_argument('--embedding_dim', type=int, default=128)
     parser.add_argument('--n_layer', type=int, default=3)
-    parser.add_argument('--n_head', type=int, default=1)
+    parser.add_argument('--n_head', type=int, default=1)  # not used
     parser.add_argument('--residual_in_fp32', type=bool, default=True)
     parser.add_argument('--rms_norm', type=bool, default=True)
     parser.add_argument('--fused_add_norm', type=bool, default=True)
@@ -607,7 +607,7 @@ if __name__ == '__main__':
     parser.add_argument('--weight_decay', '-wd', type=float, default=1e-4)
     parser.add_argument('--warmup_steps', type=int, default=10000)
     parser.add_argument('--eval_parallel', type=int, default=0)
-    parser.add_argument('--num_eval_episodes', type=int, default=100)
+    parser.add_argument('--num_eval_episodes', type=int, default=1)
     parser.add_argument('--max_iters', type=int, default=10)
     parser.add_argument('--num_steps_per_iter', type=int, default=10000)
     parser.add_argument('--device', type=str, default='cuda')
