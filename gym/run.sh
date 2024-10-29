@@ -1,0 +1,1 @@
+python experiment.py --env 'hopper' --dataset 'medium' --seed 123 --time_embd False --type_input 'B3LD' --run_type 'train' --mamba_type 'tr' --K 20 --batch_sze 64 --d_model 64 --embedding_dim 128 -lr 1e-4
